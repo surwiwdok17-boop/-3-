@@ -1,8 +1,11 @@
-Створення структури БД)
--- Створення основних таблиць бази даних бібліотеки
+-- =========================================================================
+-- 1. СТВОРЕННЯ СТРУКТУРИ БАЗИ ДАНИХ
+-- =========================================================================
+
 CREATE TABLE readers (
     reader_id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
+    first_name VARCHAR(100) NOT NULL,
+    last_name VARCHAR(100) NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     status VARCHAR(20) DEFAULT 'Active',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -10,8 +13,9 @@ CREATE TABLE readers (
 
 CREATE TABLE books (
     book_id SERIAL PRIMARY KEY,
+    isbn VARCHAR(50),
     title VARCHAR(150) NOT NULL,
-    author VARCHAR(100) NOT NULL,
+    author_id INT NOT NULL,
     year INTEGER,
     stock INT DEFAULT 1
 );
@@ -52,14 +56,20 @@ CREATE TABLE scheduled_operations (
     scheduled_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     executed_at TIMESTAMP
 );
--- Додавання початкових записів читачів (відповідно до твоїх даних із бази)[cite: 4]
+
+
+-- =========================================================================
+-- 2. ДОДАВАННЯ ПОЧАТКОВИХ ДАНИХ
+-- =========================================================================
+
+-- Додавання читачів[cite: 4]
 INSERT INTO readers (first_name, last_name, email) VALUES
 ('Максим', 'Бойко', 'maksym.boyko@example.com'),[cite: 4]
 ('Денис', 'Шевчук', 'denys.shevchuk@example.com'),[cite: 4]
 ('Вікторія', 'Кравченко', 'viktoria.kravchenko@example.com'),[cite: 4]
 ('Софія', 'Мельник', 'sofia.melnyk@example.com');[cite: 4]
 
--- Додавання початкових книг (відповідно до твоїх даних із бази)[cite: 3]
+-- Додавання книг[cite: 3]
 INSERT INTO books (book_id, isbn, title, author_id) VALUES
 (5, '978-617-12-0005-9', 'Приблуда', 5),[cite: 3]
 (2, '978-617-12-0002-8', 'Ворошиловград', 2),[cite: 3]
@@ -67,7 +77,10 @@ INSERT INTO books (book_id, isbn, title, author_id) VALUES
 (9, '978-966-03-4566-7', 'Земля', 6),[cite: 3]
 (11, '978-966-03-4567-4', 'Царівна', 6);[cite: 3]
 
-Базові операції модифікації)
+
+-- =========================================================================
+-- 3. БАЗОВІ ОПЕРАЦІЇ МОДИФІКАЦІЇ
+-- =========================================================================
 
 -- Перевірка та безпечне оновлення даних
 SELECT * FROM books WHERE book_id = 1;
@@ -81,7 +94,10 @@ DELETE FROM readers
 WHERE reader_id = 999 
   AND NOT EXISTS (SELECT 1 FROM lendings WHERE reader_id = 999);
 
-  (Робота з транзакціями)
+
+-- =========================================================================
+-- 4. РОБОТА З ТРАНЗАКЦІЯМИ
+-- =========================================================================
 
 -- Приклад використання транзакцій, ACID та точок збереження (SAVEPOINT)
 BEGIN;
@@ -99,11 +115,14 @@ WHERE reader_id = 1;
 -- Якщо все добре, фіксуємо транзакцію
 COMMIT;
 
--- У разі помилки можна було б використати:
+-- У разі помилки можна використати:
 -- ROLLBACK TO SAVEPOINT sp_after_lending;
 -- ROLLBACK;
 
-(Розширені можливості: тригери та аудит)
+
+-- =========================================================================
+-- 5. РОЗШИРЕНІ МОЖЛИВОСТІ: ТРИГЕРИ ТА АУДИТ
+-- =========================================================================
 
 -- Функція логування змін для аудит-логу
 CREATE OR REPLACE FUNCTION log_books_changes()
@@ -126,6 +145,7 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_audit_books
 AFTER INSERT OR UPDATE OR DELETE ON books
 FOR EACH ROW EXECUTE FUNCTION log_books_changes();
+
 
 -- Функція версіонування записів (SCD Type 2 через JSONB)
 CREATE OR REPLACE FUNCTION create_book_version()
@@ -153,7 +173,10 @@ CREATE TRIGGER trg_book_versioning
 AFTER INSERT OR UPDATE ON books
 FOR EACH ROW EXECUTE FUNCTION create_book_version();
 
-(Творчі розширення та бізнес-логіка)
+
+-- =========================================================================
+-- 6. ТВОРЧІ РОЗШИРЕННЯ ТА БІЗНЕС-ЛОГІКА
+-- =========================================================================
 
 -- Функція продовження терміну видачі книги зі складними перевірками бізнес-логіки
 CREATE OR REPLACE FUNCTION extend_lending(
