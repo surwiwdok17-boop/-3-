@@ -1,1 +1,208 @@
-# -3-
+Створення структури БД)
+-- Створення основних таблиць бази даних бібліотеки
+CREATE TABLE readers (
+    reader_id SERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    email VARCHAR(100) UNIQUE NOT NULL,
+    status VARCHAR(20) DEFAULT 'Active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE books (
+    book_id SERIAL PRIMARY KEY,
+    title VARCHAR(150) NOT NULL,
+    author VARCHAR(100) NOT NULL,
+    year INTEGER,
+    stock INT DEFAULT 1
+);
+
+CREATE TABLE lendings (
+    lending_id SERIAL PRIMARY KEY,
+    book_id INT REFERENCES books(book_id) ON DELETE CASCADE,
+    reader_id INT REFERENCES readers(reader_id) ON DELETE CASCADE,
+    lending_date DATE DEFAULT CURRENT_DATE,
+    due_date DATE NOT NULL,
+    return_date DATE
+);
+
+-- Таблиці для розширених можливостей (аудит, версіонування, планувальник)
+CREATE TABLE audit_log (
+    audit_id SERIAL PRIMARY KEY,
+    table_name VARCHAR(50),
+    operation VARCHAR(10),
+    record_id INT,
+    old_data JSONB,
+    new_data JSONB,
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE books_versions (
+    version_id SERIAL PRIMARY KEY,
+    book_id INT,
+    version_number INT,
+    data JSONB,
+    valid_from TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    valid_to TIMESTAMP
+);
+
+CREATE TABLE scheduled_operations (
+    operation_id SERIAL PRIMARY KEY,
+    task_name VARCHAR(100),
+    status VARCHAR(20) DEFAULT 'Pending',
+    scheduled_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    executed_at TIMESTAMP
+);
+-- Додавання початкових записів читачів (відповідно до твоїх даних із бази)[cite: 4]
+INSERT INTO readers (first_name, last_name, email) VALUES
+('Максим', 'Бойко', 'maksym.boyko@example.com'),[cite: 4]
+('Денис', 'Шевчук', 'denys.shevchuk@example.com'),[cite: 4]
+('Вікторія', 'Кравченко', 'viktoria.kravchenko@example.com'),[cite: 4]
+('Софія', 'Мельник', 'sofia.melnyk@example.com');[cite: 4]
+
+-- Додавання початкових книг (відповідно до твоїх даних із бази)[cite: 3]
+INSERT INTO books (book_id, isbn, title, author_id) VALUES
+(5, '978-617-12-0005-9', 'Приблуда', 5),[cite: 3]
+(2, '978-617-12-0002-8', 'Ворошиловград', 2),[cite: 3]
+(3, '978-617-12-0003-5', 'Московіада', 3),[cite: 3]
+(9, '978-966-03-4566-7', 'Земля', 6),[cite: 3]
+(11, '978-966-03-4567-4', 'Царівна', 6);[cite: 3]
+
+Базові операції модифікації)
+
+-- Перевірка та безпечне оновлення даних
+SELECT * FROM books WHERE book_id = 1;
+
+UPDATE books 
+SET stock = stock - 1 
+WHERE book_id = 1;
+
+-- Безпечне видалення з попередньою перевіркою
+DELETE FROM readers 
+WHERE reader_id = 999 
+  AND NOT EXISTS (SELECT 1 FROM lendings WHERE reader_id = 999);
+
+  (Робота з транзакціями)
+
+-- Приклад використання транзакцій, ACID та точок збереження (SAVEPOINT)
+BEGIN;
+
+INSERT INTO lendings (book_id, reader_id, due_date) 
+VALUES (1, 1, CURRENT_DATE + INTERVAL '14 days');
+
+SAVEPOINT sp_after_lending;
+
+-- Умовна перевірка або тестова операція
+UPDATE readers 
+SET status = 'Active' 
+WHERE reader_id = 1;
+
+-- Якщо все добре, фіксуємо транзакцію
+COMMIT;
+
+-- У разі помилки можна було б використати:
+-- ROLLBACK TO SAVEPOINT sp_after_lending;
+-- ROLLBACK;
+
+(Розширені можливості: тригери та аудит)
+
+-- Функція логування змін для аудит-логу
+CREATE OR REPLACE FUNCTION log_books_changes()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO audit_log (table_name, operation, record_id, new_data)
+        VALUES ('books', 'INSERT', NEW.book_id, row_to_json(NEW)::jsonb);
+    ELSIF TG_OP = 'UPDATE' THEN
+        INSERT INTO audit_log (table_name, operation, record_id, old_data, new_data)
+        VALUES ('books', 'UPDATE', NEW.book_id, row_to_json(OLD)::jsonb, row_to_json(NEW)::jsonb);
+    ELSIF TG_OP = 'DELETE' THEN
+        INSERT INTO audit_log (table_name, operation, record_id, old_data)
+        VALUES ('books', 'DELETE', OLD.book_id, row_to_json(OLD)::jsonb);
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_audit_books
+AFTER INSERT OR UPDATE OR DELETE ON books
+FOR EACH ROW EXECUTE FUNCTION log_books_changes();
+
+-- Функція версіонування записів (SCD Type 2 через JSONB)
+CREATE OR REPLACE FUNCTION create_book_version()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_version_number INTEGER;
+BEGIN
+    UPDATE books_versions
+    SET valid_to = CURRENT_TIMESTAMP
+    WHERE book_id = NEW.book_id AND valid_to IS NULL;
+
+    SELECT COALESCE(MAX(version_number), 0) + 1
+    INTO v_version_number
+    FROM books_versions
+    WHERE book_id = NEW.book_id;
+
+    INSERT INTO books_versions (book_id, version_number, data)
+    VALUES (NEW.book_id, v_version_number, row_to_json(NEW)::jsonb);
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_book_versioning
+AFTER INSERT OR UPDATE ON books
+FOR EACH ROW EXECUTE FUNCTION create_book_version();
+
+(Творчі розширення та бізнес-логіка)
+
+-- Функція продовження терміну видачі книги зі складними перевірками бізнес-логіки
+CREATE OR REPLACE FUNCTION extend_lending(
+    p_lending_id INTEGER,
+    p_days INTEGER DEFAULT 7
+)
+RETURNS TABLE (
+    success BOOLEAN,
+    message TEXT,
+    new_due_date DATE
+) AS $$
+DECLARE
+    v_reader_status VARCHAR(20);
+    v_overdue_count INTEGER;
+    v_current_due_date DATE;
+    v_reader_id INTEGER;
+BEGIN
+    SELECT r.status, l.due_date, l.reader_id
+    INTO v_reader_status, v_current_due_date, v_reader_id
+    FROM lendings l
+    JOIN readers r ON l.reader_id = r.reader_id
+    WHERE l.lending_id = p_lending_id AND l.return_date IS NULL;
+
+    IF NOT FOUND THEN
+        RETURN QUERY SELECT FALSE, 'Видача не знайдена або книга вже повернена'::TEXT, NULL::DATE;
+        RETURN;
+    END IF;
+
+    IF v_reader_status = 'Blocked' THEN
+        RETURN QUERY SELECT FALSE, 'Читач заблокований'::TEXT, NULL::DATE;
+        RETURN;
+    END IF;
+
+    SELECT COUNT(*)
+    INTO v_overdue_count
+    FROM lendings
+    WHERE reader_id = v_reader_id
+        AND return_date IS NULL
+        AND due_date < CURRENT_DATE;
+
+    IF v_overdue_count > 0 THEN
+        RETURN QUERY SELECT FALSE, 'У читача є прострочені книги'::TEXT, NULL::DATE;
+        RETURN;
+    END IF;
+
+    UPDATE lendings
+    SET due_date = due_date + p_days
+    WHERE lending_id = p_lending_id;
+
+    RETURN QUERY SELECT TRUE, 'Термін продовжено'::TEXT, (v_current_due_date + p_days)::DATE;
+END;
+$$ LANGUAGE plpgsql;
